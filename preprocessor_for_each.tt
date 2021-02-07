@@ -1,0 +1,201 @@
+#pragma once
+
+#define EXPAND(x)     x
+
+<#@ assembly name="System.Core.dll" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#
+
+//-------------------------------------------------------------------------------------------------
+// Generate a comment block.. very similar to this one
+//-------------------------------------------------------------------------------------------------
+void WriteComment(string text)
+{
+	WriteLine("");
+	WriteLine("//-------------------------------------------------------------------------------------------------");
+	if (!string.IsNullOrEmpty(text))
+		foreach (var line in text.Split('\n'))
+			WriteLine($"// {line}");
+	WriteLine("//-------------------------------------------------------------------------------------------------");
+}
+
+//-------------------------------------------------------------------------------------------------
+// Build the indexor to support a maximum number of arguments. This value must be evenly divisble by all available loop sets
+// Count: Total number of elements to support
+//-------------------------------------------------------------------------------------------------
+void BuildSelectAtIndex(int count)
+{
+	var line = "#define _SELECT_AT_INDEX(";
+	for (int i = 0; i < count; ++i)
+		line += $"x{i},";
+	line += "VAL, ... ) VAL";
+
+	WriteLine(line);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Build a macro to make use of the global selector to pick the value at a given index
+// Count: Pre divided number of elements to generate so that "count * set" equals the size of the select at macro
+// Name: The name of the macro to generate
+// Prefix: Any text to add to the index of the element to select
+// Set: The number of array elements per loop
+//-------------------------------------------------------------------------------------------------
+void BuildSelector(int count, string name, string prefix, int set)
+{
+	var line = $"#define {name}(...) EXPAND(_SELECT_AT_INDEX(__VA_ARGS__,";
+
+	for (int c = count; c > 0; --c)
+		for (int i = 0; i < set; ++i)
+			line += $"{prefix}{c},";
+
+	line += "0))";
+
+	WriteLine(line);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Build the for loop macro for the give state
+// Count: Pre divided number of elements to generate so that "count * set" equals the size of the select at macro
+// Name: The name of the macro to generate
+// Prefix: Any text to add to the index of the element to select
+// Set: The number of array elements per loop
+// Index: Whether to generate the loop index counter or no
+//-------------------------------------------------------------------------------------------------
+void BuildSet(int count, string name, int args, int set, bool index)
+{
+	WriteComment("");
+
+	if (args > 0)
+		name += $"_{args}ARG" + (args>1?"S":"");
+
+	if (set > 1)
+		name += $"_{set}";
+
+	if (index)
+		name += "_COUNT";
+
+	// Generate the helper macros that will apply the action
+	for (int c = 1; c <= count; ++c)
+	{
+		var line = $"#define _{name}_{c}(what";
+		if (index)
+			line += ",i";
+
+		for (int i = 0; i < args; ++i)
+			line += $",a{i}";
+
+		for (int i = 0; i < set; ++i)
+			line += $",x{i}";
+
+		if (c > 1)
+			line += ",...";
+
+		line += ") EXPAND(what(";
+
+		if (index)
+			line += "i,";
+
+		for (int i = 0; i < args; ++i)
+			line += $"a{i},";
+
+		for (int i = 0; i < set; ++i)
+			line += $"x{i},";
+
+		line = line.TrimEnd(',');
+
+		line += ")";
+
+		if (c > 1)
+		{
+			line += $" _{name}_{c-1}(what,";
+
+			if (index)
+				line += "i+1,";
+
+			for (int i = 0; i < args; ++i)
+				line += $"a{i},";
+
+			line += "__VA_ARGS__)";
+		}
+
+		line += ")";
+
+		WriteLine(line);
+	}
+
+	// Generate the selctor to pick which loop helper to start at
+	var selector = $"_{name}_SELECT";
+	BuildSelector(count, selector, $"_{name}_", set);
+
+	// Generate some helpful comments on the proper macro declaration
+	{
+		var comment = $"{name}: Apply the action 'what' to a sequence of elements.";
+
+		if (index)
+			comment += $"\n  Count: The loop index is passed into the action.";
+
+		if (args > 0)
+		{
+			comment += "\n  ";
+			for (int i = 0; i < args; ++i)
+				comment += $"a{i},";
+			comment = comment.TrimEnd(',');
+			comment += ": Static arguments that are passed into the action.";
+		}
+
+		comment += $"\n  Loop: Each iteration processes {set} argument" + (set > 1 ? "s" : "");
+
+		WriteComment(comment);
+	}
+
+	// Generate the final macro generation
+	{
+		var line = $"#define {name}(what,";
+
+		for (int i = 0; i < args; ++i)
+			line += $"a{i},";
+
+		line += $"...) EXPAND({selector}(__VA_ARGS__)(what,";
+
+		if (index)
+			line += "0,";
+
+		for (int i = 0; i < args; ++i)
+			line += $"a{i},";
+
+		line += "__VA_ARGS__))";
+
+		WriteLine(line);
+	}
+
+	WriteLine("");
+}
+
+//-------------------------------------------------------------------------------------------------
+// Generate all permutations of the for loop macros
+// Count: The maximum number of elements to support
+// Sets: The maximum array set to support. Count must be evenly divisible by all values from 1 to Sets
+//-------------------------------------------------------------------------------------------------
+void BuildAll(int count, int sets)
+{
+	BuildSelectAtIndex(count);
+
+	WriteComment("NARGSX is used to count how many arguments are in a set.\nThe number represents how many arguments are used per iteration. So NARGS2, each pair consists one element");
+
+	for (int i = 1; i <= sets; ++i)
+		BuildSelector(count / i, $"NARGS{i}", "", i);
+
+	WriteLine("");
+
+	for (int i = 1; i <= sets; ++i)
+		for (int a = 0; a <= 3; ++a)
+		{
+			BuildSet(count / i, "FOR_EACH", a, i, false);
+			BuildSet(count / i, "FOR_EACH", a, i, true);
+		}
+}
+
+BuildAll(60, 6);
+#>
